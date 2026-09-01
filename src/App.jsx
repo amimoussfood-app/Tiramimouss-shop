@@ -39,6 +39,7 @@ export default function App() {
   const [afterLogin, setAfterLogin] = useState(null);
 
   const [products, setProducts] = useState(null);
+  const [categories, setCategories] = useState([]);
   const [myOrders, setMyOrders] = useState([]);
   const [adminOrders, setAdminOrders] = useState([]);
   const [cart, setCart] = useState({});
@@ -66,6 +67,8 @@ export default function App() {
       }
       const { data: prods } = await supabase.from("products").select("*").order("created_at", { ascending: true });
       setProducts(prods || []);
+      const { data: cats } = await supabase.from("categories").select("*").order("position", { ascending: true });
+      setCategories(cats || []);
       setLoading(false);
     })();
 
@@ -232,6 +235,7 @@ export default function App() {
       description: p.desc,
       promo: p.promo,
       promo_text: p.promo ? p.promoText : null,
+      category_id: p.categoryId || null,
     };
     if (p.id) {
       const { data, error } = await supabase.from("products").update(body).eq("id", p.id).select().single();
@@ -259,6 +263,38 @@ export default function App() {
     }
     setProducts((prev) => prev.filter((p) => p.id !== id));
     showToast("Produit supprimé");
+  };
+
+  const addCategory = async (name) => {
+    const { data, error } = await supabase
+      .from("categories")
+      .insert({ name, position: categories.length })
+      .select()
+      .single();
+    if (error) {
+      showToast("Échec de la création de la catégorie");
+      return;
+    }
+    setCategories((prev) => [...prev, data]);
+  };
+
+  const renameCategory = async (id, name) => {
+    const { data, error } = await supabase.from("categories").update({ name }).eq("id", id).select().single();
+    if (error) {
+      showToast("Échec du renommage");
+      return;
+    }
+    setCategories((prev) => prev.map((c) => (c.id === id ? data : c)));
+  };
+
+  const deleteCategory = async (id) => {
+    const { error } = await supabase.from("categories").delete().eq("id", id);
+    if (error) {
+      showToast("Échec de la suppression de la catégorie");
+      return;
+    }
+    setCategories((prev) => prev.filter((c) => c.id !== id));
+    setProducts((prev) => prev.map((p) => (p.category_id === id ? { ...p, category_id: null } : p)));
   };
 
   if (loading || !products) {
@@ -313,7 +349,9 @@ export default function App() {
       <TricolorRule />
 
       <main style={s.main}>
-        {view === "boutique" && <Boutique s={s} products={products} banners={activeBanners} addToCart={addToCart} />}
+        {view === "boutique" && (
+          <Boutique s={s} products={products} categories={categories} banners={activeBanners} addToCart={addToCart} />
+        )}
 
         {view === "compte" && (
           <AccountView
@@ -351,6 +389,10 @@ export default function App() {
             products={products}
             saveProduct={saveProduct}
             deleteProduct={deleteProduct}
+            categories={categories}
+            addCategory={addCategory}
+            renameCategory={renameCategory}
+            deleteCategory={deleteCategory}
             orders={adminOrders}
             updateOrderStatus={updateOrderStatus}
           />
@@ -402,7 +444,29 @@ function ProductGallery({ s, photos, alt, promo }) {
   );
 }
 
-function Boutique({ s, products, banners, addToCart }) {
+function ProductCard({ s, p, addToCart }) {
+  return (
+    <div style={s.card}>
+      <ProductGallery s={s} photos={p.photos} alt={p.name} promo={p.promo} />
+      <div style={s.cardBody}>
+        <h3 style={s.cardTitle}>{p.name}</h3>
+        <p style={s.cardDesc}>{p.description}</p>
+        <div style={s.cardFooter}>
+          <span style={s.price}>{money(p.price)}</span>
+          <button style={s.primaryBtnSm} onClick={() => addToCart(p.id)}>
+            Ajouter
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Boutique({ s, products, categories, banners, addToCart }) {
+  const [activeCat, setActiveCat] = useState("all");
+
+  const filtered = activeCat === "all" ? products : products.filter((p) => p.category_id === activeCat);
+
   return (
     <div>
       {banners.length > 0 && (
@@ -414,24 +478,62 @@ function Boutique({ s, products, banners, addToCart }) {
           ))}
         </div>
       )}
-      <div style={s.grid}>
-        {products.map((p) => (
-          <div key={p.id} style={s.card}>
-            <ProductGallery s={s} photos={p.photos} alt={p.name} promo={p.promo} />
-            <div style={s.cardBody}>
-              <h3 style={s.cardTitle}>{p.name}</h3>
-              <p style={s.cardDesc}>{p.description}</p>
-              <div style={s.cardFooter}>
-                <span style={s.price}>{money(p.price)}</span>
-                <button style={s.primaryBtnSm} onClick={() => addToCart(p.id)}>
-                  Ajouter
-                </button>
-              </div>
-            </div>
-          </div>
-        ))}
 
-      </div>
+      {categories.length > 0 && (
+        <div style={s.catRow}>
+          <button style={activeCat === "all" ? s.catChipActive : s.catChip} onClick={() => setActiveCat("all")}>
+            Tout
+          </button>
+          {categories.map((c) => (
+            <button
+              key={c.id}
+              style={activeCat === c.id ? s.catChipActive : s.catChip}
+              onClick={() => setActiveCat(c.id)}
+            >
+              {c.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {activeCat === "all" && categories.length > 0 ? (
+        <div>
+          {categories.map((c) => {
+            const items = products.filter((p) => p.category_id === c.id);
+            if (items.length === 0) return null;
+            return (
+              <div key={c.id} style={{ marginBottom: 28 }}>
+                <h2 style={s.catSectionTitle}>{c.name}</h2>
+                <div style={s.grid}>
+                  {items.map((p) => (
+                    <ProductCard key={p.id} s={s} p={p} addToCart={addToCart} />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          {(() => {
+            const uncategorized = products.filter((p) => !p.category_id);
+            if (uncategorized.length === 0) return null;
+            return (
+              <div>
+                <h2 style={s.catSectionTitle}>Autres</h2>
+                <div style={s.grid}>
+                  {uncategorized.map((p) => (
+                    <ProductCard key={p.id} s={s} p={p} addToCart={addToCart} />
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      ) : (
+        <div style={s.grid}>
+          {filtered.map((p) => (
+            <ProductCard key={p.id} s={s} p={p} addToCart={addToCart} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -823,11 +925,11 @@ function StatusTrack({ status, s }) {
   );
 }
 
-function Admin({ s, products, saveProduct, deleteProduct, orders, updateOrderStatus }) {
+function Admin({ s, products, saveProduct, deleteProduct, categories, addCategory, renameCategory, deleteCategory, orders, updateOrderStatus }) {
   const [tab, setTab] = useState("produits");
   const [editing, setEditing] = useState(null);
 
-  const blankProduct = () => ({ id: null, name: "", price: 0, photos: [], desc: "", promo: false, promoText: "" });
+  const blankProduct = () => ({ id: null, name: "", price: 0, photos: [], desc: "", promo: false, promoText: "", categoryId: null });
 
   const openEdit = (p) =>
     setEditing(
@@ -840,6 +942,7 @@ function Admin({ s, products, saveProduct, deleteProduct, orders, updateOrderSta
             desc: p.description || "",
             promo: p.promo,
             promoText: p.promo_text || "",
+            categoryId: p.category_id || null,
           }
         : blankProduct()
     );
@@ -849,11 +952,16 @@ function Admin({ s, products, saveProduct, deleteProduct, orders, updateOrderSta
     setEditing(null);
   };
 
+  const catName = (id) => categories.find((c) => c.id === id)?.name;
+
   return (
     <div>
       <div style={s.adminTabs}>
         <button style={tab === "produits" ? s.navBtnActive : s.navBtn} onClick={() => setTab("produits")}>
           Produits & bannières
+        </button>
+        <button style={tab === "categories" ? s.navBtnActive : s.navBtn} onClick={() => setTab("categories")}>
+          Catégories
         </button>
         <button style={tab === "commandes" ? s.navBtnActive : s.navBtn} onClick={() => setTab("commandes")}>
           Commandes
@@ -866,7 +974,9 @@ function Admin({ s, products, saveProduct, deleteProduct, orders, updateOrderSta
             + Nouveau produit
           </button>
           <div style={{ height: 16 }} />
-          {editing && <ProductForm s={s} product={editing} onSave={submitProduct} onCancel={() => setEditing(null)} />}
+          {editing && (
+            <ProductForm s={s} product={editing} categories={categories} onSave={submitProduct} onCancel={() => setEditing(null)} />
+          )}
           <div style={s.grid}>
             {products.map((p) => (
               <div key={p.id} style={s.card}>
@@ -877,6 +987,7 @@ function Admin({ s, products, saveProduct, deleteProduct, orders, updateOrderSta
                 <div style={s.cardBody}>
                   <h3 style={s.cardTitle}>{p.name}</h3>
                   <span style={s.price}>{money(p.price)}</span>
+                  {p.category_id && <p style={s.muted}>{catName(p.category_id)}</p>}
                   {p.promo && <p style={s.promoText}>{p.promo_text}</p>}
                   <div style={s.adminCardActions}>
                     <button style={s.linkBtn} onClick={() => openEdit(p)}>
@@ -891,6 +1002,16 @@ function Admin({ s, products, saveProduct, deleteProduct, orders, updateOrderSta
             ))}
           </div>
         </div>
+      )}
+
+      {tab === "categories" && (
+        <CategoriesManager
+          s={s}
+          categories={categories}
+          addCategory={addCategory}
+          renameCategory={renameCategory}
+          deleteCategory={deleteCategory}
+        />
       )}
 
       {tab === "commandes" && (
@@ -947,7 +1068,87 @@ function Admin({ s, products, saveProduct, deleteProduct, orders, updateOrderSta
   );
 }
 
-function ProductForm({ s, product, onSave, onCancel }) {
+function CategoriesManager({ s, categories, addCategory, renameCategory, deleteCategory }) {
+  const [newName, setNewName] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editingName, setEditingName] = useState("");
+
+  const submitNew = async () => {
+    const name = newName.trim();
+    if (!name) return;
+    await addCategory(name);
+    setNewName("");
+  };
+
+  const submitRename = async (id) => {
+    const name = editingName.trim();
+    if (!name) return;
+    await renameCategory(id, name);
+    setEditingId(null);
+  };
+
+  return (
+    <div>
+      <div style={s.card}>
+        <h3 style={s.h2}>Nouvelle catégorie</h3>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            style={{ ...s.input, marginBottom: 0, flex: 1 }}
+            placeholder="Ex : Cheesecake"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submitNew()}
+          />
+          <button style={{ ...s.primaryBtn, marginTop: 0 }} onClick={submitNew}>
+            Ajouter
+          </button>
+        </div>
+      </div>
+
+      {categories.map((c) => (
+        <div key={c.id} style={s.card}>
+          <div style={{ padding: 14, display: "flex", alignItems: "center", gap: 10 }}>
+            {editingId === c.id ? (
+              <>
+                <input
+                  style={{ ...s.input, marginBottom: 0, flex: 1 }}
+                  value={editingName}
+                  onChange={(e) => setEditingName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && submitRename(c.id)}
+                />
+                <button style={s.linkBtn} onClick={() => submitRename(c.id)}>
+                  Valider
+                </button>
+                <button style={s.linkBtn} onClick={() => setEditingId(null)}>
+                  Annuler
+                </button>
+              </>
+            ) : (
+              <>
+                <span style={{ flex: 1, fontFamily: "'Fraunces', serif", fontSize: 16 }}>{c.name}</span>
+                <button
+                  style={s.linkBtn}
+                  onClick={() => {
+                    setEditingId(c.id);
+                    setEditingName(c.name);
+                  }}
+                >
+                  Renommer
+                </button>
+                <button style={s.linkBtnDanger} onClick={() => deleteCategory(c.id)}>
+                  Supprimer
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      ))}
+      {categories.length === 0 && <p style={s.muted}>Aucune catégorie pour l'instant.</p>}
+    </div>
+  );
+}
+
+function ProductForm({ s, product, categories, onSave, onCancel }) {
   const [p, setP] = useState(product);
   const [uploadingSlot, setUploadingSlot] = useState(null);
   const [uploadErr, setUploadErr] = useState("");
@@ -992,6 +1193,18 @@ function ProductForm({ s, product, onSave, onCancel }) {
       <h3 style={s.h2}>{product.id ? "Modifier le produit" : "Nouveau produit"}</h3>
       <input style={s.input} placeholder="Nom du produit" value={p.name} onChange={(e) => setP({ ...p, name: e.target.value })} />
       <input style={s.input} type="number" placeholder="Prix (DH)" value={p.price} onChange={(e) => setP({ ...p, price: parseFloat(e.target.value) || 0 })} />
+      <select
+        style={s.input}
+        value={p.categoryId || ""}
+        onChange={(e) => setP({ ...p, categoryId: e.target.value || null })}
+      >
+        <option value="">Sans catégorie</option>
+        {(categories || []).map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.name}
+          </option>
+        ))}
+      </select>
 
       <p style={{ ...s.muted, marginBottom: 6 }}>Photos (jusqu'à {MAX_PHOTOS}, différents angles)</p>
       <div style={s.photoSlots}>
@@ -1062,6 +1275,10 @@ function styles() {
     main: { maxWidth: 960, margin: "0 auto", padding: "22px 20px 20px" },
     bannerWrap: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 },
     banner: { background: red, color: cream, padding: "10px 16px", borderRadius: 8, fontFamily: serif, fontSize: 15 },
+    catRow: { display: "flex", gap: 8, overflowX: "auto", paddingBottom: 6, marginBottom: 18 },
+    catChip: { flexShrink: 0, fontFamily: sans, fontSize: 13, padding: "8px 14px", borderRadius: 20, border: `1px solid ${ink}22`, background: "#FFFFFF", color: ink, cursor: "pointer" },
+    catChipActive: { flexShrink: 0, fontFamily: sans, fontSize: 13, padding: "8px 14px", borderRadius: 20, border: `1px solid ${blue}`, background: blue, color: cream, cursor: "pointer" },
+    catSectionTitle: { fontFamily: serif, fontSize: 21, margin: "0 0 12px" },
     grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 18 },
     card: { background: "#FFFFFF", border: `1px solid ${ink}14`, borderRadius: 12, overflow: "hidden", padding: 0, marginBottom: 18 },
     cardImgWrap: { position: "relative", width: "100%", aspectRatio: "4/3", background: `${ink}08` },

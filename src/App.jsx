@@ -227,7 +227,8 @@ export default function App() {
     const body = {
       name: p.name,
       price: p.price,
-      photo: p.photo,
+      photos: p.photos.filter(Boolean),
+      photo: p.photos.filter(Boolean)[0] || null,
       description: p.desc,
       promo: p.promo,
       promo_text: p.promo ? p.promoText : null,
@@ -367,6 +368,40 @@ export default function App() {
   );
 }
 
+function ProductGallery({ s, photos, alt, promo }) {
+  const list = photos && photos.length > 0 ? photos : [];
+  const [active, setActive] = useState(0);
+  if (list.length === 0) {
+    return (
+      <div style={s.cardImgWrap}>
+        {promo && <span style={s.promoBadge}>Promo</span>}
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div style={s.cardImgWrap}>
+        <img src={list[active]} alt={alt} style={s.cardImg} />
+        {promo && <span style={s.promoBadge}>Promo</span>}
+      </div>
+      {list.length > 1 && (
+        <div style={s.thumbRow}>
+          {list.map((url, i) => (
+            <button
+              key={url + i}
+              onClick={() => setActive(i)}
+              style={i === active ? s.thumbActive : s.thumb}
+              aria-label={`Voir la photo ${i + 1}`}
+            >
+              <img src={url} alt="" style={s.thumbImg} />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Boutique({ s, products, banners, addToCart }) {
   return (
     <div>
@@ -382,10 +417,7 @@ function Boutique({ s, products, banners, addToCart }) {
       <div style={s.grid}>
         {products.map((p) => (
           <div key={p.id} style={s.card}>
-            <div style={s.cardImgWrap}>
-              <img src={p.photo} alt={p.name} style={s.cardImg} />
-              {p.promo && <span style={s.promoBadge}>Promo</span>}
-            </div>
+            <ProductGallery s={s} photos={p.photos} alt={p.name} promo={p.promo} />
             <div style={s.cardBody}>
               <h3 style={s.cardTitle}>{p.name}</h3>
               <p style={s.cardDesc}>{p.description}</p>
@@ -398,6 +430,7 @@ function Boutique({ s, products, banners, addToCart }) {
             </div>
           </div>
         ))}
+
       </div>
     </div>
   );
@@ -794,12 +827,20 @@ function Admin({ s, products, saveProduct, deleteProduct, orders, updateOrderSta
   const [tab, setTab] = useState("produits");
   const [editing, setEditing] = useState(null);
 
-  const blankProduct = () => ({ id: null, name: "", price: 0, photo: "", desc: "", promo: false, promoText: "" });
+  const blankProduct = () => ({ id: null, name: "", price: 0, photos: [], desc: "", promo: false, promoText: "" });
 
   const openEdit = (p) =>
     setEditing(
       p
-        ? { id: p.id, name: p.name, price: p.price, photo: p.photo || "", desc: p.description || "", promo: p.promo, promoText: p.promo_text || "" }
+        ? {
+            id: p.id,
+            name: p.name,
+            price: p.price,
+            photos: p.photos && p.photos.length ? p.photos : p.photo ? [p.photo] : [],
+            desc: p.description || "",
+            promo: p.promo,
+            promoText: p.promo_text || "",
+          }
         : blankProduct()
     );
 
@@ -830,7 +871,7 @@ function Admin({ s, products, saveProduct, deleteProduct, orders, updateOrderSta
             {products.map((p) => (
               <div key={p.id} style={s.card}>
                 <div style={s.cardImgWrap}>
-                  <img src={p.photo} alt={p.name} style={s.cardImg} />
+                  <img src={(p.photos && p.photos[0]) || ""} alt={p.name} style={s.cardImg} />
                   {p.promo && <span style={s.promoBadge}>Promo</span>}
                 </div>
                 <div style={s.cardBody}>
@@ -908,13 +949,79 @@ function Admin({ s, products, saveProduct, deleteProduct, orders, updateOrderSta
 
 function ProductForm({ s, product, onSave, onCancel }) {
   const [p, setP] = useState(product);
+  const [uploadingSlot, setUploadingSlot] = useState(null);
+  const [uploadErr, setUploadErr] = useState("");
+
+  const MAX_PHOTOS = 3;
+  const photos = p.photos || [];
+
+  const handleFile = async (e, slot) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingSlot(slot);
+    setUploadErr("");
+    try {
+      const path = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.\-_]/g, "_")}`;
+      const { error: upErr } = await supabase.storage.from("product-photos").upload(path, file, {
+        cacheControl: "3600",
+        upsert: false,
+      });
+      if (upErr) throw upErr;
+      const { data } = supabase.storage.from("product-photos").getPublicUrl(path);
+      setP((prev) => {
+        const next = [...(prev.photos || [])];
+        next[slot] = data.publicUrl;
+        return { ...prev, photos: next };
+      });
+    } catch (err) {
+      setUploadErr("Échec de l'envoi de la photo.");
+    }
+    setUploadingSlot(null);
+  };
+
+  const removePhoto = (slot) => {
+    setP((prev) => {
+      const next = [...(prev.photos || [])];
+      next.splice(slot, 1);
+      return { ...prev, photos: next };
+    });
+  };
+
   return (
     <div style={s.card}>
       <h3 style={s.h2}>{product.id ? "Modifier le produit" : "Nouveau produit"}</h3>
       <input style={s.input} placeholder="Nom du produit" value={p.name} onChange={(e) => setP({ ...p, name: e.target.value })} />
       <input style={s.input} type="number" placeholder="Prix (DH)" value={p.price} onChange={(e) => setP({ ...p, price: parseFloat(e.target.value) || 0 })} />
-      <input style={s.input} placeholder="URL de la photo" value={p.photo} onChange={(e) => setP({ ...p, photo: e.target.value })} />
-      <textarea style={{ ...s.input, minHeight: 60 }} placeholder="Description" value={p.desc} onChange={(e) => setP({ ...p, desc: e.target.value })} />
+
+      <p style={{ ...s.muted, marginBottom: 6 }}>Photos (jusqu'à {MAX_PHOTOS}, différents angles)</p>
+      <div style={s.photoSlots}>
+        {Array.from({ length: MAX_PHOTOS }).map((_, slot) => (
+          <div key={slot} style={s.photoSlot}>
+            {photos[slot] ? (
+              <>
+                <img src={photos[slot]} alt={`Photo ${slot + 1}`} style={s.photoSlotImg} />
+                <button type="button" style={s.photoRemoveBtn} onClick={() => removePhoto(slot)} disabled={uploadingSlot !== null}>
+                  Retirer
+                </button>
+              </>
+            ) : (
+              <label style={s.photoSlotEmpty}>
+                {uploadingSlot === slot ? "Envoi…" : "+ Photo"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handleFile(e, slot)}
+                  style={{ display: "none" }}
+                  disabled={uploadingSlot !== null}
+                />
+              </label>
+            )}
+          </div>
+        ))}
+      </div>
+      {uploadErr && <p style={s.loginError}>{uploadErr}</p>}
+
+      <textarea style={{ ...s.input, minHeight: 60, marginTop: 10 }} placeholder="Description" value={p.desc} onChange={(e) => setP({ ...p, desc: e.target.value })} />
       <label style={s.checkboxRow}>
         <input type="checkbox" checked={p.promo} onChange={(e) => setP({ ...p, promo: e.target.checked })} />
         Afficher une bannière promo
@@ -923,7 +1030,7 @@ function ProductForm({ s, product, onSave, onCancel }) {
         <input style={s.input} placeholder="Texte de la promo (ex : -10% ce week-end)" value={p.promoText} onChange={(e) => setP({ ...p, promoText: e.target.value })} />
       )}
       <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
-        <button style={s.primaryBtn} onClick={() => onSave(p)}>
+        <button style={s.primaryBtn} onClick={() => onSave(p)} disabled={uploadingSlot !== null}>
           Enregistrer
         </button>
         <button style={s.secondaryBtn} onClick={onCancel}>
@@ -972,6 +1079,16 @@ function styles() {
     linkBtn: { background: "none", border: "none", color: blue, cursor: "pointer", fontSize: 13, padding: 0, textDecoration: "none" },
     linkBtnDanger: { background: "none", border: "none", color: red, cursor: "pointer", fontSize: 13, padding: 0 },
     input: { display: "block", width: "100%", boxSizing: "border-box", padding: "10px 12px", marginBottom: 10, border: `1px solid ${ink}22`, borderRadius: 8, fontFamily: sans, fontSize: 14, background: "#FFFFFF" },
+    uploadBtn: { display: "block", textAlign: "center", width: "100%", boxSizing: "border-box", padding: "12px", marginBottom: 10, border: `1.5px dashed ${blue}55`, borderRadius: 8, fontFamily: sans, fontSize: 14, color: blue, background: `${blue}08`, cursor: "pointer" },
+    thumbRow: { display: "flex", gap: 6, padding: "8px 8px 0" },
+    thumb: { width: 44, height: 44, borderRadius: 6, overflow: "hidden", border: `1.5px solid transparent`, padding: 0, cursor: "pointer", background: "none" },
+    thumbActive: { width: 44, height: 44, borderRadius: 6, overflow: "hidden", border: `1.5px solid ${blue}`, padding: 0, cursor: "pointer", background: "none" },
+    thumbImg: { width: "100%", height: "100%", objectFit: "cover" },
+    photoSlots: { display: "flex", gap: 8, marginBottom: 10 },
+    photoSlot: { flex: 1, aspectRatio: "1/1", position: "relative" },
+    photoSlotImg: { width: "100%", height: "100%", objectFit: "cover", borderRadius: 8 },
+    photoSlotEmpty: { display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", border: `1.5px dashed ${blue}55`, borderRadius: 8, color: blue, fontSize: 12, fontFamily: sans, cursor: "pointer", background: `${blue}08`, textAlign: "center" },
+    photoRemoveBtn: { position: "absolute", bottom: 4, left: 4, right: 4, background: "#1C1A17CC", color: "#F4EFE3", border: "none", borderRadius: 6, fontSize: 10, padding: "4px 0", cursor: "pointer" },
     loginWrap: { display: "flex", justifyContent: "center", paddingTop: 20 },
     loginCard: { width: "100%", maxWidth: 380, background: "#FFFFFF", border: `1px solid ${ink}14`, borderRadius: 20, padding: "28px 26px", textAlign: "center", boxShadow: `0 6px 24px ${ink}0F` },
     loginTitle: { fontFamily: serif, fontSize: 24, margin: "0 0 8px", color: ink },

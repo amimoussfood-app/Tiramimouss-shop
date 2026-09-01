@@ -114,58 +114,34 @@ export default function App() {
   }, [view, isAdmin, loadAdminOrders]);
 
   const registerAccount = async (f) => {
-    const { data, error } = await supabase.auth.signUp({ email: f.email, password: f.password });
+    // Profile fields travel as auth metadata so a database trigger can create
+    // the profile row server-side — this works even if email confirmation is
+    // opened in a completely different browser/tab/device than the signup.
+    const { data, error } = await supabase.auth.signUp({
+      email: f.email,
+      password: f.password,
+      options: {
+        data: {
+          first_name: f.firstName,
+          last_name: f.lastName,
+          phone: f.phone,
+          address: f.address || null,
+          birthdate: f.birthdate,
+        },
+      },
+    });
     if (error) throw error;
     if (data.session) {
-      const { error: insertErr } = await supabase.from("profiles").insert({
-        id: data.user.id,
-        first_name: f.firstName,
-        last_name: f.lastName,
-        phone: f.phone,
-        email: f.email,
-        address: f.address || null,
-        birthdate: f.birthdate,
-        role: "customer",
-      });
-      if (insertErr) throw insertErr;
       await loadProfile(data.user.id);
       return { status: "ready" };
     }
-    // email confirmation required — stash details to finish the profile on first real login
-    try {
-      sessionStorage.setItem("tiramimouss:pending-profile", JSON.stringify(f));
-    } catch {}
     return { status: "confirm-email" };
   };
 
   const loginAccount = async (email, password) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
-    let p = await loadProfile(data.user.id);
-    if (!p) {
-      let pending = null;
-      try {
-        const raw = sessionStorage.getItem("tiramimouss:pending-profile");
-        if (raw) pending = JSON.parse(raw);
-      } catch {}
-      if (pending && pending.email === email) {
-        const { error: insertErr } = await supabase.from("profiles").insert({
-          id: data.user.id,
-          first_name: pending.firstName,
-          last_name: pending.lastName,
-          phone: pending.phone,
-          email,
-          address: pending.address || null,
-          birthdate: pending.birthdate,
-          role: "customer",
-        });
-        if (insertErr) throw insertErr;
-        p = await loadProfile(data.user.id);
-        try {
-          sessionStorage.removeItem("tiramimouss:pending-profile");
-        } catch {}
-      }
-    }
+    const p = await loadProfile(data.user.id);
     return { status: p ? "ready" : "incomplete-profile" };
   };
 
